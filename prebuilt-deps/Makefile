@@ -10,31 +10,31 @@ prepare-win32: prepare-sdl2 prepare-ffmpeg-shared-win32 prepare-ffmpeg-dev-win32
 prepare-win64: prepare-sdl2 prepare-ffmpeg-shared-win64 prepare-ffmpeg-dev-win64 prepare-adb
 
 prepare-ffmpeg-shared-win32:
-	@./prepare-dep https://ffmpeg.zeranoe.com/builds/win32/shared/ffmpeg-4.1.3-win32-shared.zip \
-		8ea472d673370d5e87517a75587abfa6f189ee4f82e8da21fdbc49d0db0c1a89 \
-		ffmpeg-4.1.3-win32-shared
+	@./prepare-dep https://ffmpeg.zeranoe.com/builds/win32/shared/ffmpeg-4.2.2-win32-shared.zip \
+		ab5d603aaa54de360db2c2ffe378c82376b9343ea1175421dd644639aa07ee31 \
+		ffmpeg-4.2.2-win32-shared
 
 prepare-ffmpeg-dev-win32:
-	@./prepare-dep https://ffmpeg.zeranoe.com/builds/win32/dev/ffmpeg-4.1.3-win32-dev.zip \
-		e16d3150b6ccf0b71908f5b964cb8c051d79053c8f5cd6d777d617ab4f03613a \
-		ffmpeg-4.1.3-win32-dev
+	@./prepare-dep https://ffmpeg.zeranoe.com/builds/win32/dev/ffmpeg-4.2.2-win32-dev.zip \
+		8d224be567a2950cad4be86f4aabdd045bfa52ad758e87c72cedd278613bc6c8 \
+		ffmpeg-4.2.2-win32-dev
 
 prepare-ffmpeg-shared-win64:
-	@./prepare-dep https://ffmpeg.zeranoe.com/builds/win64/shared/ffmpeg-4.1.3-win64-shared.zip \
-		0b974578e07d974c4bafb36c7ed0b46e46b001d38b149455089c13b57ddefe5d \
-		ffmpeg-4.1.3-win64-shared
+	@./prepare-dep https://ffmpeg.zeranoe.com/builds/win64/shared/ffmpeg-4.2.2-win64-shared.zip \
+		5aedf268952b7d9f6541dbfcb47cd86a7e7881a3b7ba482fd3bc4ca33bda7bf5 \
+		ffmpeg-4.2.2-win64-shared
 
 prepare-ffmpeg-dev-win64:
-	@./prepare-dep https://ffmpeg.zeranoe.com/builds/win64/dev/ffmpeg-4.1.3-win64-dev.zip \
-		334b473467db096a5b74242743592a73e120a137232794508e4fc55593696a5b \
-		ffmpeg-4.1.3-win64-dev
+	@./prepare-dep https://ffmpeg.zeranoe.com/builds/win64/dev/ffmpeg-4.2.2-win64-dev.zip \
+		f4885f859c5b0d6663c2a0a4c1cf035b1c60b146402790b796bd3ad84f4f3ca2 \
+		ffmpeg-4.2.2-win64-dev
 
 prepare-sdl2:
-	@./prepare-dep https://libsdl.org/release/SDL2-devel-2.0.8-mingw.tar.gz \
-		ffff7305d634aff5e1df5b7bb935435c3a02c8b03ad94a1a2be9169a558a7961 \
-		SDL2-2.0.8
+	@./prepare-dep https://libsdl.org/release/SDL2-devel-2.0.12-mingw.tar.gz \
+		e614a60f797e35ef9f3f96aef3dc6a1d786de3cc7ca6216f97e435c0b6aafc46 \
+		SDL2-2.0.12
 
 prepare-adb:
-	@./prepare-dep https://dl.google.com/android/repository/platform-tools_r29.0.1-windows.zip \
-		2334f92cf571fd2d9bf6ff7c637765bee5d8323e0bd8e051e15927d87b54b4e8 \
+	@./prepare-dep https://dl.google.com/android/repository/platform-tools_r30.0.0-windows.zip \
+		854305f9a702f5ea2c3de73edde402bd26afa0ee944c9b0c4380420f5a862e0d \
 		platform-tools

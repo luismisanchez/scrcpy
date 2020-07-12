@@ -7,6 +7,11 @@
 #include <sys/time.h>
 #include <SDL2/SDL.h>
 
+#ifdef _WIN32
+# include <windows.h>
+#endif
+
+#include "config.h"
 #include "command.h"
 #include "common.h"
 #include "compat.h"
@@ -17,15 +22,15 @@
 #include "file_handler.h"
 #include "fps_counter.h"
 #include "input_manager.h"
-#include "log.h"
-#include "lock_util.h"
-#include "net.h"
 #include "recorder.h"
 #include "screen.h"
 #include "server.h"
 #include "stream.h"
 #include "tiny_xpm.h"
 #include "video_buffer.h"
+#include "util/lock.h"
+#include "util/log.h"
+#include "util/net.h"
 
 static struct server server = SERVER_INITIALIZER;
 static struct screen screen = SCREEN_INITIALIZER;
@@ -41,11 +46,24 @@ static struct input_manager input_manager = {
     .controller = &controller,
     .video_buffer = &video_buffer,
     .screen = &screen,
+    .prefer_text = false, // initialized later
 };
+
+#ifdef _WIN32
+BOOL WINAPI windows_ctrl_handler(DWORD ctrl_type) {
+    if (ctrl_type == CTRL_C_EVENT) {
+        SDL_Event event;
+        event.type = SDL_QUIT;
+        SDL_PushEvent(&event);
+        return TRUE;
+    }
+    return FALSE;
+}
+#endif // _WIN32
 
 // init SDL and set appropriate hints
 static bool
-sdl_init_and_configure(bool display) {
+sdl_init_and_configure(bool display, const char *render_driver) {
     uint32_t flags = display ? SDL_INIT_VIDEO : SDL_INIT_EVENTS;
     if (SDL_Init(flags)) {
         LOGC("Could not initialize SDL: %s", SDL_GetError());
@@ -54,13 +72,25 @@ sdl_init_and_configure(bool display) {
 
     atexit(SDL_Quit);
 
+#ifdef _WIN32
+    // Clean up properly on Ctrl+C on Windows
+    bool ok = SetConsoleCtrlHandler(windows_ctrl_handler, TRUE);
+    if (!ok) {
+        LOGW("Could not set Ctrl+C handler");
+    }
+#endif // _WIN32
+
     if (!display) {
         return true;
     }
 
-    // Use the best available scale quality
-    if (!SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "2")) {
-        LOGW("Could not enable bilinear filtering");
+    if (render_driver && !SDL_SetHint(SDL_HINT_RENDER_DRIVER, render_driver)) {
+        LOGW("Could not set render driver");
+    }
+
+    // Linear filtering
+    if (!SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1")) {
+        LOGW("Could not enable linear filtering");
     }
 
 #ifdef SCRCPY_SDL_HAS_HINT_MOUSE_FOCUS_CLICKTHROUGH
@@ -101,10 +131,12 @@ sdl_init_and_configure(bool display) {
 // <https://stackoverflow.com/a/40693139/1987178>
 static int
 event_watcher(void *data, SDL_Event *event) {
+    (void) data;
     if (event->type == SDL_WINDOWEVENT
             && event->window.event == SDL_WINDOWEVENT_RESIZED) {
-        // called from another thread, not very safe, but it's a workaround!
-        screen_render(&screen);
+        // In practice, it seems to always be called from the same thread in
+        // that specific case. Anyway, it's just a workaround.
+        screen_render(&screen, true);
     }
     return 0;
 }
@@ -142,12 +174,7 @@ handle_event(SDL_Event *event, bool control) {
             }
             break;
         case SDL_WINDOWEVENT:
-            switch (event->window.event) {
-                case SDL_WINDOWEVENT_EXPOSED:
-                case SDL_WINDOWEVENT_SIZE_CHANGED:
-                    screen_render(&screen);
-                    break;
-            }
+            screen_handle_window_event(&screen, &event->window);
             break;
         case SDL_TEXTINPUT:
             if (!control) {
@@ -180,6 +207,11 @@ handle_event(SDL_Event *event, bool control) {
             input_manager_process_mouse_button(&input_manager, &event->button,
                                                control);
             break;
+        case SDL_FINGERMOTION:
+        case SDL_FINGERDOWN:
+        case SDL_FINGERUP:
+            input_manager_process_touch(&input_manager, &event->tfinger);
+            break;
         case SDL_DROPFILE: {
             if (!control) {
                 break;
@@ -199,6 +231,7 @@ handle_event(SDL_Event *event, bool control) {
 
 static bool
 event_loop(bool display, bool control) {
+    (void) display;
 #ifdef CONTINUOUS_RESIZING_WORKAROUND
     if (display) {
         SDL_AddEventWatch(event_watcher, NULL);
@@ -211,27 +244,13 @@ event_loop(bool display, bool control) {
             case EVENT_RESULT_STOPPED_BY_USER:
                 return true;
             case EVENT_RESULT_STOPPED_BY_EOS:
+                LOGW("Device disconnected");
                 return false;
             case EVENT_RESULT_CONTINUE:
                 break;
         }
     }
     return false;
-}
-
-static process_t
-set_show_touches_enabled(const char *serial, bool enabled) {
-    const char *value = enabled ? "1" : "0";
-    const char *const adb_cmd[] = {
-        "shell", "settings", "put", "system", "show_touches", value
-    };
-    return adb_execute(serial, adb_cmd, ARRAY_LEN(adb_cmd));
-}
-
-static void
-wait_show_touches(process_t process) {
-    // reap the process, ignore the result
-    process_check_success(process, "show_touches");
 }
 
 static SDL_LogPriority
@@ -253,13 +272,14 @@ sdl_priority_from_av_level(int level) {
 
 static void
 av_log_callback(void *avcl, int level, const char *fmt, va_list vl) {
+    (void) avcl;
     SDL_LogPriority priority = sdl_priority_from_av_level(level);
     if (priority == 0) {
         return;
     }
     char *local_fmt = SDL_malloc(strlen(fmt) + 10);
     if (!local_fmt) {
-        LOGC("Cannot allocate string");
+        LOGC("Could not allocate string");
         return;
     }
     // strcpy is safe here, the destination is large enough
@@ -273,23 +293,22 @@ bool
 scrcpy(const struct scrcpy_options *options) {
     bool record = !!options->record_filename;
     struct server_params params = {
+        .log_level = options->log_level,
         .crop = options->crop,
-        .local_port = options->port,
+        .port_range = options->port_range,
         .max_size = options->max_size,
         .bit_rate = options->bit_rate,
-        .send_frame_meta = record,
+        .max_fps = options->max_fps,
+        .lock_video_orientation = options->lock_video_orientation,
         .control = options->control,
+        .display_id = options->display_id,
+        .show_touches = options->show_touches,
+        .stay_awake = options->stay_awake,
+        .codec_options = options->codec_options,
+        .force_adb_forward = options->force_adb_forward,
     };
     if (!server_start(&server, options->serial, &params)) {
         return false;
-    }
-
-    process_t proc_show_touches = PROCESS_NONE;
-    bool show_touches_waited;
-    if (options->show_touches) {
-        LOGI("Enable show_touches");
-        proc_show_touches = set_show_touches_enabled(options->serial, true);
-        show_touches_waited = false;
     }
 
     bool ret = false;
@@ -302,7 +321,7 @@ scrcpy(const struct scrcpy_options *options) {
     bool controller_initialized = false;
     bool controller_started = false;
 
-    if (!sdl_init_and_configure(options->display)) {
+    if (!sdl_init_and_configure(options->display, options->render_driver)) {
         goto end;
     }
 
@@ -334,7 +353,8 @@ scrcpy(const struct scrcpy_options *options) {
         video_buffer_initialized = true;
 
         if (options->control) {
-            if (!file_handler_init(&file_handler, server.serial)) {
+            if (!file_handler_init(&file_handler, server.serial,
+                                   options->push_target)) {
                 goto end;
             }
             file_handler_initialized = true;
@@ -380,8 +400,15 @@ scrcpy(const struct scrcpy_options *options) {
             controller_started = true;
         }
 
-        if (!screen_init_rendering(&screen, device_name, frame_size,
-                                   options->always_on_top)) {
+        const char *window_title =
+            options->window_title ? options->window_title : device_name;
+
+        if (!screen_init_rendering(&screen, window_title, frame_size,
+                                   options->always_on_top, options->window_x,
+                                   options->window_y, options->window_width,
+                                   options->window_height,
+                                   options->window_borderless,
+                                   options->rotation, options-> mipmaps)) {
             goto end;
         }
 
@@ -391,7 +418,7 @@ scrcpy(const struct scrcpy_options *options) {
             msg.set_screen_power_mode.mode = SCREEN_POWER_MODE_OFF;
 
             if (!controller_push_msg(&controller, &msg)) {
-                LOGW("Cannot request 'set screen power mode'");
+                LOGW("Could not request 'set screen power mode'");
             }
         }
 
@@ -400,10 +427,7 @@ scrcpy(const struct scrcpy_options *options) {
         }
     }
 
-    if (options->show_touches) {
-        wait_show_touches(proc_show_touches);
-        show_touches_waited = true;
-    }
+    input_manager.prefer_text = options->prefer_text;
 
     ret = event_loop(options->display, options->control);
     LOGD("quit...");
@@ -457,16 +481,6 @@ end:
     if (fps_counter_initialized) {
         fps_counter_join(&fps_counter);
         fps_counter_destroy(&fps_counter);
-    }
-
-    if (options->show_touches) {
-        if (!show_touches_waited) {
-            // wait the process which enabled "show touches"
-            wait_show_touches(proc_show_touches);
-        }
-        LOGI("Disable show_touches");
-        proc_show_touches = set_show_touches_enabled(options->serial, false);
-        wait_show_touches(proc_show_touches);
     }
 
     server_destroy(&server);

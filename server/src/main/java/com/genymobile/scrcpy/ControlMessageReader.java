@@ -8,14 +8,16 @@ import java.nio.charset.StandardCharsets;
 
 public class ControlMessageReader {
 
-    private static final int INJECT_KEYCODE_PAYLOAD_LENGTH = 9;
-    private static final int INJECT_MOUSE_EVENT_PAYLOAD_LENGTH = 17;
-    private static final int INJECT_SCROLL_EVENT_PAYLOAD_LENGTH = 20;
-    private static final int SET_SCREEN_POWER_MODE_PAYLOAD_LENGTH = 1;
+    static final int INJECT_KEYCODE_PAYLOAD_LENGTH = 9;
+    static final int INJECT_TOUCH_EVENT_PAYLOAD_LENGTH = 27;
+    static final int INJECT_SCROLL_EVENT_PAYLOAD_LENGTH = 20;
+    static final int SET_SCREEN_POWER_MODE_PAYLOAD_LENGTH = 1;
+    static final int SET_CLIPBOARD_FIXED_PAYLOAD_LENGTH = 1;
 
-    public static final int TEXT_MAX_LENGTH = 300;
-    public static final int CLIPBOARD_TEXT_MAX_LENGTH = 4093;
-    private static final int RAW_BUFFER_SIZE = 1024;
+    public static final int CLIPBOARD_TEXT_MAX_LENGTH = 4092; // 4096 - 1 (type) - 1 (parse flag) - 2 (length)
+    public static final int INJECT_TEXT_MAX_LENGTH = 300;
+
+    private static final int RAW_BUFFER_SIZE = 4096;
 
     private final byte[] rawBuffer = new byte[RAW_BUFFER_SIZE];
     private final ByteBuffer buffer = ByteBuffer.wrap(rawBuffer);
@@ -59,8 +61,8 @@ public class ControlMessageReader {
             case ControlMessage.TYPE_INJECT_TEXT:
                 msg = parseInjectText();
                 break;
-            case ControlMessage.TYPE_INJECT_MOUSE_EVENT:
-                msg = parseInjectMouseEvent();
+            case ControlMessage.TYPE_INJECT_TOUCH_EVENT:
+                msg = parseInjectTouchEvent();
                 break;
             case ControlMessage.TYPE_INJECT_SCROLL_EVENT:
                 msg = parseInjectScrollEvent();
@@ -75,6 +77,7 @@ public class ControlMessageReader {
             case ControlMessage.TYPE_EXPAND_NOTIFICATION_PANEL:
             case ControlMessage.TYPE_COLLAPSE_NOTIFICATION_PANEL:
             case ControlMessage.TYPE_GET_CLIPBOARD:
+            case ControlMessage.TYPE_ROTATE_DEVICE:
                 msg = ControlMessage.createEmpty(type);
                 break;
             default:
@@ -120,14 +123,19 @@ public class ControlMessageReader {
         return ControlMessage.createInjectText(text);
     }
 
-    private ControlMessage parseInjectMouseEvent() {
-        if (buffer.remaining() < INJECT_MOUSE_EVENT_PAYLOAD_LENGTH) {
+    private ControlMessage parseInjectTouchEvent() {
+        if (buffer.remaining() < INJECT_TOUCH_EVENT_PAYLOAD_LENGTH) {
             return null;
         }
         int action = toUnsigned(buffer.get());
-        int buttons = buffer.getInt();
+        long pointerId = buffer.getLong();
         Position position = readPosition(buffer);
-        return ControlMessage.createInjectMouseEvent(action, buttons, position);
+        // 16 bits fixed-point
+        int pressureInt = toUnsigned(buffer.getShort());
+        // convert it to a float between 0 and 1 (0x1p16f is 2^16 as float)
+        float pressure = pressureInt == 0xffff ? 1f : (pressureInt / 0x1p16f);
+        int buttons = buffer.getInt();
+        return ControlMessage.createInjectTouchEvent(action, pointerId, position, pressure, buttons);
     }
 
     private ControlMessage parseInjectScrollEvent() {
@@ -141,11 +149,15 @@ public class ControlMessageReader {
     }
 
     private ControlMessage parseSetClipboard() {
+        if (buffer.remaining() < SET_CLIPBOARD_FIXED_PAYLOAD_LENGTH) {
+            return null;
+        }
+        boolean parse = buffer.get() != 0;
         String text = parseString();
         if (text == null) {
             return null;
         }
-        return ControlMessage.createSetClipboard(text);
+        return ControlMessage.createSetClipboard(text, parse);
     }
 
     private ControlMessage parseSetScreenPowerMode() {
@@ -164,12 +176,10 @@ public class ControlMessageReader {
         return new Position(x, y, screenWidth, screenHeight);
     }
 
-    @SuppressWarnings("checkstyle:MagicNumber")
     private static int toUnsigned(short value) {
         return value & 0xffff;
     }
 
-    @SuppressWarnings("checkstyle:MagicNumber")
     private static int toUnsigned(byte value) {
         return value & 0xff;
     }

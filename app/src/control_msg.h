@@ -5,19 +5,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "config.h"
 #include "android/input.h"
 #include "android/keycodes.h"
 #include "common.h"
 
-#define CONTROL_MSG_TEXT_MAX_LENGTH 300
-#define CONTROL_MSG_CLIPBOARD_TEXT_MAX_LENGTH 4093
+#define CONTROL_MSG_INJECT_TEXT_MAX_LENGTH 300
+#define CONTROL_MSG_CLIPBOARD_TEXT_MAX_LENGTH 4092
 #define CONTROL_MSG_SERIALIZED_MAX_SIZE \
-    (3 + CONTROL_MSG_CLIPBOARD_TEXT_MAX_LENGTH)
+    (4 + CONTROL_MSG_CLIPBOARD_TEXT_MAX_LENGTH)
+
+#define POINTER_ID_MOUSE UINT64_C(-1);
 
 enum control_msg_type {
     CONTROL_MSG_TYPE_INJECT_KEYCODE,
     CONTROL_MSG_TYPE_INJECT_TEXT,
-    CONTROL_MSG_TYPE_INJECT_MOUSE_EVENT,
+    CONTROL_MSG_TYPE_INJECT_TOUCH_EVENT,
     CONTROL_MSG_TYPE_INJECT_SCROLL_EVENT,
     CONTROL_MSG_TYPE_BACK_OR_SCREEN_ON,
     CONTROL_MSG_TYPE_EXPAND_NOTIFICATION_PANEL,
@@ -25,6 +28,7 @@ enum control_msg_type {
     CONTROL_MSG_TYPE_GET_CLIPBOARD,
     CONTROL_MSG_TYPE_SET_CLIPBOARD,
     CONTROL_MSG_TYPE_SET_SCREEN_POWER_MODE,
+    CONTROL_MSG_TYPE_ROTATE_DEVICE,
 };
 
 enum screen_power_mode {
@@ -47,8 +51,10 @@ struct control_msg {
         struct {
             enum android_motionevent_action action;
             enum android_motionevent_buttons buttons;
+            uint64_t pointer_id;
             struct position position;
-        } inject_mouse_event;
+            float pressure;
+        } inject_touch_event;
         struct {
             struct position position;
             int32_t hscroll;
@@ -56,6 +62,7 @@ struct control_msg {
         } inject_scroll_event;
         struct {
             char *text; // owned, to be freed by SDL_free()
+            bool paste;
         } set_clipboard;
         struct {
             enum screen_power_mode mode;
